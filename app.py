@@ -1,42 +1,38 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI
+from pydantic import BaseModel
 import torch
-import torchaudio
-from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
+import soundfile as sf
 import io
+import base64
+
+from transformers import AutoProcessor, AutoModel
 
 app = FastAPI()
 
-# 🔁 CHANGE THIS PER DEPLOYMENT
-MODEL_NAME = "badrex/w2v-bert-2.0-kikuyu-asr"
-# MODEL_NAME = "thinkKenya/wav2vec2-large-xls-r-300m-sw"
+MODEL_NAME = "kyutai/pocket-tts"
 
-processor = Wav2Vec2Processor.from_pretrained(MODEL_NAME)
-model = Wav2Vec2ForCTC.from_pretrained(MODEL_NAME)
+processor = AutoProcessor.from_pretrained(MODEL_NAME)
+model = AutoModel.from_pretrained(MODEL_NAME)
 model.eval()
 
-@app.post("/transcribe")
-async def transcribe(file: UploadFile = File(...)):
-    audio_bytes = await file.read()
+class TTSRequest(BaseModel):
+    text: str
 
-    waveform, sample_rate = torchaudio.load(io.BytesIO(audio_bytes))
-
-    if sample_rate != 16000:
-        waveform = torchaudio.functional.resample(
-            waveform, sample_rate, 16000
-        )
-
-    input_values = processor(
-        waveform.squeeze(),
-        sampling_rate=16000,
-        return_tensors="pt"
-    ).input_values
-
+@app.post("/tts")
+def tts(req: TTSRequest):
     with torch.no_grad():
-        logits = model(input_values).logits
+        inputs = processor(req.text, return_tensors="pt")
+        audio = model.generate(**inputs)
 
-    predicted_ids = torch.argmax(logits, dim=-1)
-    transcription = processor.decode(predicted_ids[0])
+    # Convert tensor → wav bytes
+    wav_io = io.BytesIO()
+    sf.write(wav_io, audio.cpu().numpy(), samplerate=24000, format="WAV")
+    wav_bytes = wav_io.getvalue()
 
     return {
-        "text": transcription
+        "audio_base64": base64.b64encode(wav_bytes).decode("utf-8")
     }
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}

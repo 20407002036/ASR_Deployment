@@ -3,4 +3,6 @@ uvicorn
 torch
 torchaudio
 transformers
+soundfile
+numpy
 python-multipart
